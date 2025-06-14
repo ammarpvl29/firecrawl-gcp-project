@@ -1,5 +1,7 @@
 # requirements.txt
 Flask
 gunicorn
-requests
 google-cloud-storage
+requests
+beautifulsoup4
+html2text
