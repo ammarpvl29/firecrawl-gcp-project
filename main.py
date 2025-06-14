@@ -1,4 +1,4 @@
-# main.py (Corrected Version)
+# main.py (Final Corrected Version)
 import os
 import json
 import requests
@@ -78,35 +78,41 @@ def start_telkom_crawl():
         "Content-Type": "application/json"
     }
 
-    # --- CORRECTED PAYLOAD STRUCTURE ---
-    # The structure now matches the Firecrawl API documentation.
+    # --- FINAL CORRECTED PAYLOAD STRUCTURE ---
+    # The structure now includes the required 'formats' key within scrapeOptions.
     crawl_payload = {
         "url": "https://smb.telkomuniversity.ac.id/",
         "webhook": {
             "url": f"{SERVICE_URL}/webhook",
             "events": ["crawl.page", "crawl.completed", "crawl.failed"]
         },
-        # Crawler options are now at the top level
         "maxDepth": 10,
         "limit": 2000,
-        "excludePaths": ["**/login/**", "**/register/**"], # Use excludePaths as per docs
-        # Scrape options for each page are in 'scrapeOptions'
+        "excludePaths": ["**/login/**", "**/register/**"],
         "scrapeOptions": {
+            # THE FIX IS HERE: Explicitly telling the crawler to get markdown
+            "formats": ["markdown"], 
             "onlyMainContent": True
         }
     }
+    
+    print(f"DEBUG: Sending the following payload to Firecrawl: {json.dumps(crawl_payload, indent=2)}")
 
     print(f"Initiating crawl job. Sending results to {SERVICE_URL}/webhook.")
     try:
         response = requests.post(CRAWL_API_URL, headers=headers, json=crawl_payload, timeout=30)
-        response.raise_for_status()
+        response.raise_for_status() 
         
         job_id = response.json().get('jobId')
         print(f"Crawl job submitted successfully. Job ID: {job_id}")
         return jsonify(success=True, jobId=job_id), 200
 
     except requests.exceptions.RequestException as e:
-        print(f"ERROR: Failed to start crawl job. {e}")
+        print(f"CRITICAL ERROR: Failed to start crawl job. Exception: {e}")
+        if e.response:
+            print(f"CRITICAL ERROR DETAILS: Status Code = {e.response.status_code}")
+            print(f"CRITICAL ERROR BODY: {e.response.text}")
+        
         error_details = e.response.text if e.response else "No response from server"
         return jsonify(success=False, error=str(e), details=error_details), 500
 
