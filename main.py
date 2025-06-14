@@ -1,4 +1,4 @@
-# main.py
+# main.py (Corrected Version)
 import os
 import json
 import requests
@@ -10,10 +10,8 @@ app = Flask(__name__)
 storage_client = storage.Client()
 
 # --- Load Configuration from Environment Variables ---
-# These will be set in the Cloud Run service configuration
 BUCKET_NAME = os.environ.get("BUCKET_NAME", "your-telkom-chatbot-data")
 FIRECRAWL_API_KEY = os.environ.get("FIRECRAWL_API_KEY", "fc-your-api-key")
-# We will get the service URL after deployment and add it as an env var
 SERVICE_URL = os.environ.get("SERVICE_URL", "")
 
 # --- Firecrawl API Endpoint ---
@@ -25,7 +23,6 @@ def firecrawl_webhook():
     Public endpoint to receive webhook events from Firecrawl.
     It processes crawl data and saves it to Google Cloud Storage.
     """
-    # Verify the request is a POST request
     if request.method != 'POST':
         return 'Only POST requests are accepted', 405
 
@@ -42,17 +39,12 @@ def firecrawl_webhook():
 
     print(f"Processing event. Type: {event_type}, Crawl ID: {crawl_id}")
 
-    # Process 'crawl.page' events which contain the scraped data [21]
     if event_type == 'crawl.page' and data:
         page_data = data[0]
         if page_data.get('success') and 'markdown' in page_data:
             source_url = page_data.get('metadata', {}).get('sourceURL', 'unknown_url')
-            
-            # Sanitize the URL to create a valid filename
             filename = "".join(c for c in source_url if c.isalnum() or c in ('-', '_')).rstrip() + ".md"
-            
             try:
-                # Organize files in the bucket by their crawl ID for better management
                 blob_path = f"{crawl_id}/{filename}"
                 bucket = storage_client.bucket(BUCKET_NAME)
                 blob = bucket.blob(blob_path)
@@ -67,7 +59,6 @@ def firecrawl_webhook():
     elif event_type == 'crawl.failed':
         print(f"ERROR: Crawl job {crawl_id} failed. Details: {payload.get('error')}")
 
-    # Acknowledge receipt to Firecrawl so it doesn't retry
     return jsonify(success=True), 200
 
 @app.route('/start-crawl', methods=['POST'])
@@ -87,28 +78,28 @@ def start_telkom_crawl():
         "Content-Type": "application/json"
     }
 
-    # The payload for the Firecrawl API, directing results to our own webhook
+    # --- CORRECTED PAYLOAD STRUCTURE ---
+    # The structure now matches the Firecrawl API documentation.
     crawl_payload = {
         "url": "https://smb.telkomuniversity.ac.id/",
-        "crawlerOptions": {
-            "includes": ["**/*"], # Using includes with glob pattern
-            "excludes": ["**/login/**", "**/register/**"],
-            "maxDepth": 10,
-            "limit": 2000
-        },
-        "pageOptions": { # Use pageOptions for single page scrape settings within a crawl
-            "onlyMainContent": True
-        },
         "webhook": {
-            "url": f"{SERVICE_URL}/webhook", # The full URL to our webhook endpoint
+            "url": f"{SERVICE_URL}/webhook",
             "events": ["crawl.page", "crawl.completed", "crawl.failed"]
+        },
+        # Crawler options are now at the top level
+        "maxDepth": 10,
+        "limit": 2000,
+        "excludePaths": ["**/login/**", "**/register/**"], # Use excludePaths as per docs
+        # Scrape options for each page are in 'scrapeOptions'
+        "scrapeOptions": {
+            "onlyMainContent": True
         }
     }
 
     print(f"Initiating crawl job. Sending results to {SERVICE_URL}/webhook.")
     try:
         response = requests.post(CRAWL_API_URL, headers=headers, json=crawl_payload, timeout=30)
-        response.raise_for_status() # This will raise an HTTPError for bad responses (4xx or 5xx)
+        response.raise_for_status()
         
         job_id = response.json().get('jobId')
         print(f"Crawl job submitted successfully. Job ID: {job_id}")
@@ -120,5 +111,4 @@ def start_telkom_crawl():
         return jsonify(success=False, error=str(e), details=error_details), 500
 
 if __name__ == "__main__":
-    # This part is for local testing. Gunicorn will run the app in Cloud Run.
     app.run(debug=True, host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
