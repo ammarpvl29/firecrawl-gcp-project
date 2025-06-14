@@ -1,4 +1,4 @@
-# main.py (Final Corrected Version)
+# main.py (Final Version for Production)
 import os
 import json
 import requests
@@ -10,9 +10,9 @@ app = Flask(__name__)
 storage_client = storage.Client()
 
 # --- Load Configuration from Environment Variables ---
-BUCKET_NAME = os.environ.get("BUCKET_NAME", "your-telkom-chatbot-data")
-FIRECRAWL_API_KEY = os.environ.get("FIRECRAWL_API_KEY", "fc-your-api-key")
-SERVICE_URL = os.environ.get("SERVICE_URL", "")
+BUCKET_NAME = os.environ.get("BUCKET_NAME")
+FIRECRAWL_API_KEY = os.environ.get("FIRECRAWL_API_KEY")
+SERVICE_URL = os.environ.get("SERVICE_URL")
 
 # --- Firecrawl API Endpoint ---
 CRAWL_API_URL = "https://api.firecrawl.dev/v1/crawl"
@@ -78,8 +78,6 @@ def start_telkom_crawl():
         "Content-Type": "application/json"
     }
 
-    # --- FINAL CORRECTED PAYLOAD STRUCTURE ---
-    # The structure now includes the required 'formats' key within scrapeOptions.
     crawl_payload = {
         "url": "https://smb.telkomuniversity.ac.id/",
         "webhook": {
@@ -90,15 +88,12 @@ def start_telkom_crawl():
         "limit": 2000,
         "excludePaths": ["**/login/**", "**/register/**"],
         "scrapeOptions": {
-            # THE FIX IS HERE: Explicitly telling the crawler to get markdown
             "formats": ["markdown"], 
             "onlyMainContent": True
         }
     }
     
-    print(f"DEBUG: Sending the following payload to Firecrawl: {json.dumps(crawl_payload, indent=2)}")
-
-    print(f"Initiating crawl job. Sending results to {SERVICE_URL}/webhook.")
+    print(f"Initiating crawl job with payload: {json.dumps(crawl_payload, indent=2)}")
     try:
         response = requests.post(CRAWL_API_URL, headers=headers, json=crawl_payload, timeout=30)
         response.raise_for_status() 
