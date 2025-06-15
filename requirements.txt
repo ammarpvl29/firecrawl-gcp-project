@@ -2,6 +2,7 @@
 Flask
 gunicorn
 google-cloud-storage
+google-cloud-bigquery
 requests
 beautifulsoup4
 html2text
