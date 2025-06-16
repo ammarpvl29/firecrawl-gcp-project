@@ -3,12 +3,13 @@ import os
 import re
 import json
 import time
-import requests
 from datetime import datetime
 from typing import Dict, List
 
-from flask import Flask, request, jsonify
-from google.cloud import storage, bigquery
+import requests
+
+from flask import Flask, jsonify
+from google.cloud import storage, bigquery, aiplatform
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse
 import html2text
