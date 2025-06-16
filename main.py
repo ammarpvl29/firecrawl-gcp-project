@@ -23,6 +23,10 @@ BUCKET_NAME = os.environ.get("BUCKET_NAME")
 BIGQUERY_DATASET = "telkom_university"
 STRUCTURED_TABLE_ID = "structured_content"
 CHUNKS_TABLE_ID = "text_chunks"
+# NEW - For Vertex AI
+VERTEX_INDEX_ID = os.environ.get("VERTEX_INDEX_ID")
+VERTEX_ENDPOINT_ID = os.environ.get("VERTEX_ENDPOINT_ID")
+VERTEX_REGION = "europe-west1"
 
 
 # ==============================================================================
