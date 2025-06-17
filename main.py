@@ -13,8 +13,7 @@ from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse
 import html2text
 
-from google.cloud import aiplatform
-import vertexai
+from google.cloud import aiplatform, vertexai
 from vertexai.language_models import TextEmbeddingModel
 
 # --- Initialize Flask App and GCP Clients ---
