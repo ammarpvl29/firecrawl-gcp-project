@@ -170,7 +170,7 @@ def process_crawled_data():
     return jsonify(success=True, structured_rows_processed=len(all_structured_rows), chunk_rows_processed=len(all_chunk_rows)), 200
 
 # ==============================================================================
-# SECTION 3: EMBEDDING GENERATION ENDPOINT (Corrected Version)
+# SECTION 3: EMBEDDING GENERATION ENDPOINT (Corrected Model Version)
 # ==============================================================================
 @app.route('/generate-embeddings', methods=['POST'])
 def generate_embeddings():
@@ -195,11 +195,10 @@ def generate_embeddings():
 
     try:
         print("Initializing Vertex AI clients...")
-        # --- THE FIX IS HERE: Initialize the correct library ---
         vertexai.init(project=required_vars['GCP_PROJECT'], location=VERTEX_REGION)
         
-        # This part now works because of the corrected import
-        embedding_model = TextEmbeddingModel.from_pretrained("textembedding-gecko@003")
+        # --- THE FIX IS HERE: Use the stable, widely available model version ---
+        embedding_model = TextEmbeddingModel.from_pretrained("textembedding-gecko@001")
         my_index_endpoint = aiplatform.MatchingEngineIndexEndpoint(index_endpoint_name=VERTEX_ENDPOINT_ID)
         
         project_id = required_vars['GCP_PROJECT']
