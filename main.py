@@ -1,4 +1,3 @@
-# main.py (Final Unified Version: Crawler + Cleaner)
 import os
 import re
 import json
@@ -14,9 +13,9 @@ from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse
 import html2text
 
-# --- FIX IS HERE: Import the specific model classes from the correct submodules ---
 from google.cloud import aiplatform
-from google.cloud.aiplatform.language_models import TextEmbeddingModel
+import vertexai
+from vertexai.language_models import TextEmbeddingModel
 
 # --- Initialize Flask App and GCP Clients ---
 app = Flask(__name__)
@@ -171,7 +170,7 @@ def process_crawled_data():
     return jsonify(success=True, structured_rows_processed=len(all_structured_rows), chunk_rows_processed=len(all_chunk_rows)), 200
 
 # ==============================================================================
-# SECTION 3: ROBUST EMBEDDING GENERATION ENDPOINT
+# SECTION 3: EMBEDDING GENERATION ENDPOINT (Corrected Version)
 # ==============================================================================
 @app.route('/generate-embeddings', methods=['POST'])
 def generate_embeddings():
@@ -181,7 +180,6 @@ def generate_embeddings():
     """
     print("Embedding generation request received...")
     
-    # Validate environment variables
     required_vars = {
         'VERTEX_INDEX_ID': VERTEX_INDEX_ID,
         'VERTEX_ENDPOINT_ID': VERTEX_ENDPOINT_ID,
@@ -196,49 +194,35 @@ def generate_embeddings():
         return jsonify({"error": error_msg, "success": False}), 500
 
     try:
-        # 1. Initialize Vertex AI clients with error handling
         print("Initializing Vertex AI clients...")
-        aiplatform.init(project=required_vars['GCP_PROJECT'], location=VERTEX_REGION)
+        # --- THE FIX IS HERE: Initialize the correct library ---
+        vertexai.init(project=required_vars['GCP_PROJECT'], location=VERTEX_REGION)
         
-        try:
-            embedding_model = aiplatform.TextEmbeddingModel.from_pretrained("textembedding-gecko@003")
-            my_index_endpoint = aiplatform.MatchingEngineIndexEndpoint(index_endpoint_name=VERTEX_ENDPOINT_ID)
-        except Exception as e:
-            print(f"Failed to initialize Vertex AI clients: {e}")
-            return jsonify({"error": "Failed to initialize Vertex AI clients", "success": False}), 500
+        # This part now works because of the corrected import
+        embedding_model = TextEmbeddingModel.from_pretrained("textembedding-gecko@003")
+        my_index_endpoint = aiplatform.MatchingEngineIndexEndpoint(index_endpoint_name=VERTEX_ENDPOINT_ID)
         
-        # 2. Query BigQuery for text chunks with better error handling
         project_id = required_vars['GCP_PROJECT']
         query = f"""
         SELECT 
-            source_file,
-            content_type, 
-            chunk_id,
-            text,
-            word_count,
-            processed_at
+            source_file, content_type, chunk_id, text, word_count, processed_at
         FROM `{project_id}.{BIGQUERY_DATASET}.{CHUNKS_TABLE_ID}`
-        WHERE LENGTH(TRIM(text)) > 0  -- Only non-empty chunks
+        WHERE LENGTH(TRIM(text)) > 0
         ORDER BY source_file, chunk_id
         """
         
         print(f"Running query: {query}")
-        try:
-            query_job = bigquery_client.query(query)
-            rows = list(query_job.result())
-        except Exception as e:
-            print(f"BigQuery query failed: {e}")
-            return jsonify({"error": "Failed to query text chunks from BigQuery", "success": False}), 500
+        query_job = bigquery_client.query(query)
+        rows = list(query_job.result())
             
         print(f"Found {len(rows)} text chunks to process.")
         
         if not rows:
             return jsonify({"message": "No text chunks found to process.", "success": True}), 200
 
-        # 3. Generate embeddings in batches with robust error handling
-        batch_size = 5  # Conservative batch size for stability
+        batch_size = 5
         max_retries = 3
-        retry_delay = 2  # seconds
+        retry_delay = 2
         all_embeddings = []
         failed_chunks = []
         
@@ -247,175 +231,61 @@ def generate_embeddings():
         for batch_idx in range(0, len(rows), batch_size):
             batch_rows = rows[batch_idx:batch_idx + batch_size]
             batch_num = batch_idx // batch_size + 1
-            
             print(f"Processing batch {batch_num}/{total_batches} ({len(batch_rows)} chunks)...")
             
-            # Prepare texts with length validation
-            texts_to_embed = []
-            valid_rows = []
-            
+            texts_to_embed, valid_rows = [], []
             for row in batch_rows:
                 text = row['text'].strip()
-                # Skip empty or very short texts
-                if len(text) < 10:
-                    print(f"Skipping chunk {row['chunk_id']} from {row['source_file']}: too short")
-                    continue
-                
-                # Truncate if too long (embedding model has token limits)
-                if len(text) > 8000:  # Conservative limit
-                    text = text[:8000] + "..."
-                    print(f"Truncated long text for chunk {row['chunk_id']}")
-                
+                if len(text) < 10: continue
+                if len(text) > 8000: text = text[:8000] + "..."
                 texts_to_embed.append(text)
                 valid_rows.append(row)
             
-            if not texts_to_embed:
-                print(f"No valid texts in batch {batch_num}, skipping...")
-                continue
+            if not texts_to_embed: continue
             
-            # Generate embeddings with retry logic
             for attempt in range(max_retries):
                 try:
                     embeddings = embedding_model.get_embeddings(texts_to_embed)
-                    
-                    # Process successful embeddings
                     for row, embedding in zip(valid_rows, embeddings):
-                        # Create unique ID with better sanitization
                         source_clean = re.sub(r'[^a-zA-Z0-9_-]', '_', row['source_file'])
                         unique_id = f"{source_clean}_{row['chunk_id']}"
-                        
-                        # Validate embedding
-                        if not embedding.values or len(embedding.values) == 0:
-                            print(f"Empty embedding for chunk {row['chunk_id']}, skipping...")
-                            continue
-                        
-                        all_embeddings.append({
-                            "id": unique_id,
-                            "embedding": embedding.values,
-                            "restricts": [
-                                {"namespace": "content_type", "allow": [row['content_type']]},
-                                {"namespace": "source_file", "allow": [row['source_file']]},
-                                {"namespace": "word_count", "allow": [str(row['word_count'])]}
-                            ]
-                        })
-                    
+                        if not embedding.values: continue
+                        all_embeddings.append({"id": unique_id,"embedding": embedding.values,"restricts": [{"namespace": "content_type", "allow": [row['content_type']]},{"namespace": "source_file", "allow": [row['source_file']]},{"namespace": "word_count", "allow": [str(row['word_count'])]}]})
                     print(f"Successfully generated {len(embeddings)} embeddings for batch {batch_num}")
-                    break  # Success, exit retry loop
-                    
+                    break
                 except Exception as e:
                     print(f"Attempt {attempt + 1} failed for batch {batch_num}: {e}")
                     if attempt == max_retries - 1:
-                        # Final attempt failed
                         failed_chunks.extend([f"{row['source_file']}_{row['chunk_id']}" for row in valid_rows])
                         print(f"Failed to generate embeddings for batch {batch_num} after {max_retries} attempts")
                     else:
-                        time.sleep(retry_delay * (attempt + 1))  # Exponential backoff
-            
-            # Rate limiting between batches
+                        time.sleep(retry_delay * (attempt + 1))
             time.sleep(1)
 
         if not all_embeddings:
-            return jsonify({
-                "error": "No embeddings were successfully generated", 
-                "failed_chunks": failed_chunks,
-                "success": False
-            }), 500
+            return jsonify({"error": "No embeddings were successfully generated", "failed_chunks": failed_chunks,"success": False}), 500
 
-        # 4. Save embeddings to GCS with better error handling
         print(f"Saving {len(all_embeddings)} embeddings to GCS...")
+        jsonl_lines = [json.dumps(e, ensure_ascii=False) for e in all_embeddings]
+        jsonl_string = "\n".join(jsonl_lines)
+        timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+        gcs_path = f"embeddings/telkom_embeddings_{timestamp}.json"
+        gcs_bucket = storage_client.bucket(BUCKET_NAME)
+        gcs_blob = gcs_bucket.blob(gcs_path)
+        gcs_blob.upload_from_string(jsonl_string, content_type='application/json')
+        print(f"Embeddings saved to gs://{BUCKET_NAME}/{gcs_path}")
         
-        try:
-            # Create JSONL format
-            jsonl_lines = []
-            for embedding_data in all_embeddings:
-                jsonl_lines.append(json.dumps(embedding_data, ensure_ascii=False))
-            
-            jsonl_string = "\n".join(jsonl_lines)
-            
-            # Upload to GCS with timestamp
-            timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-            gcs_path = f"embeddings/telkom_embeddings_{timestamp}.json"
-            
-            gcs_bucket = storage_client.bucket(BUCKET_NAME)
-            gcs_blob = gcs_bucket.blob(gcs_path)
-            gcs_blob.upload_from_string(jsonl_string, content_type='application/json')
-            
-            print(f"Embeddings saved to gs://{BUCKET_NAME}/{gcs_path}")
-            
-        except Exception as e:
-            print(f"Failed to save embeddings to GCS: {e}")
-            return jsonify({
-                "error": "Failed to save embeddings to GCS", 
-                "success": False,
-                "embeddings_generated": len(all_embeddings)
-            }), 500
-
-        # 5. Upsert to Vector Search with error handling
         print("Upserting embeddings to Vertex AI Vector Search...")
+        gcs_uri = f"gs://{BUCKET_NAME}/{gcs_path}"
+        my_index_endpoint.upsert_from_gcs(gcs_uri=gcs_uri, deployed_index_id="telkom_kb_v1")
+        print("Successfully upserted embeddings to Vector Search")
         
-        try:
-            # Use the timestamped file
-            gcs_uri = f"gs://{BUCKET_NAME}/{gcs_path}"
-            
-            # Upsert with retry logic
-            for attempt in range(max_retries):
-                try:
-                    my_index_endpoint.upsert_from_gcs(
-                        gcs_uri=gcs_uri,
-                        deployed_index_id="telkom_kb_v1"  # Make this configurable
-                    )
-                    print("Successfully upserted embeddings to Vector Search")
-                    break
-                    
-                except Exception as e:
-                    print(f"Upsert attempt {attempt + 1} failed: {e}")
-                    if attempt == max_retries - 1:
-                        # Log but don't fail the entire operation
-                        print(f"Failed to upsert to Vector Search after {max_retries} attempts")
-                        return jsonify({
-                            "success": True,
-                            "embeddings_generated": len(all_embeddings),
-                            "embeddings_saved_to_gcs": True,
-                            "vector_search_upsert": False,
-                            "warning": "Embeddings generated and saved but Vector Search upsert failed",
-                            "failed_chunks": failed_chunks,
-                            "gcs_path": gcs_path
-                        }), 200
-                    else:
-                        time.sleep(retry_delay * (attempt + 1))
-        
-        except Exception as e:
-            print(f"Unexpected error during Vector Search upsert: {e}")
-            return jsonify({
-                "success": True,
-                "embeddings_generated": len(all_embeddings),
-                "embeddings_saved_to_gcs": True,
-                "vector_search_upsert": False,
-                "warning": "Embeddings generated and saved but Vector Search upsert failed",
-                "error_details": str(e),
-                "failed_chunks": failed_chunks,
-                "gcs_path": gcs_path
-            }), 200
-        
-        # Success response
         print("Embedding generation and upsert process completed successfully.")
-        return jsonify({
-            "success": True,
-            "embeddings_generated": len(all_embeddings),
-            "embeddings_saved_to_gcs": True,
-            "vector_search_upsert": True,
-            "failed_chunks": failed_chunks,
-            "gcs_path": gcs_path,
-            "total_chunks_processed": len(rows)
-        }), 200
+        return jsonify({"success": True, "embeddings_generated": len(all_embeddings), "failed_chunks": failed_chunks, "gcs_path": gcs_path}), 200
         
     except Exception as e:
         print(f"Unexpected error in embedding generation: {e}")
-        return jsonify({
-            "error": "Unexpected error during embedding generation",
-            "details": str(e),
-            "success": False
-        }), 500
+        return jsonify({"error": "Unexpected error during embedding generation", "details": str(e), "success": False}), 500
 
 
 # ==============================================================================
