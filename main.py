@@ -170,7 +170,7 @@ def process_crawled_data():
     return jsonify(success=True, structured_rows_processed=len(all_structured_rows), chunk_rows_processed=len(all_chunk_rows)), 200
 
 # ==============================================================================
-# SECTION 3: EMBEDDING GENERATION ENDPOINT (Corrected Model Version)
+# SECTION 3: EMBEDDING GENERATION ENDPOINT (Final Region Fix)
 # ==============================================================================
 @app.route('/generate-embeddings', methods=['POST'])
 def generate_embeddings():
@@ -179,7 +179,10 @@ def generate_embeddings():
     and upserts them into Vertex AI Vector Search with robust error handling.
     """
     print("Embedding generation request received...")
-    
+
+    # --- THE FIX IS HERE: We will call the AI model from a region where it is available ---
+    VERTEX_REGION = "us-central1"
+
     required_vars = {
         'VERTEX_INDEX_ID': VERTEX_INDEX_ID,
         'VERTEX_ENDPOINT_ID': VERTEX_ENDPOINT_ID,
@@ -194,11 +197,14 @@ def generate_embeddings():
         return jsonify({"error": error_msg, "success": False}), 500
 
     try:
-        print("Initializing Vertex AI clients...")
+        print(f"Initializing Vertex AI clients in region: {VERTEX_REGION}...")
         vertexai.init(project=required_vars['GCP_PROJECT'], location=VERTEX_REGION)
         
-        # --- THE FIX IS HERE: Use the stable, widely available model version ---
-        embedding_model = TextEmbeddingModel.from_pretrained("textembedding-gecko@001")
+        # We go back to using the newest model, as it exists in us-central1
+        embedding_model = TextEmbeddingModel.from_pretrained("gemini-embedding-001")
+        
+        # The Index Endpoint client needs to be initialized in its own region
+        aiplatform.init(project=required_vars['GCP_PROJECT'], location="europe-west1")
         my_index_endpoint = aiplatform.MatchingEngineIndexEndpoint(index_endpoint_name=VERTEX_ENDPOINT_ID)
         
         project_id = required_vars['GCP_PROJECT']
@@ -219,19 +225,17 @@ def generate_embeddings():
         if not rows:
             return jsonify({"message": "No text chunks found to process.", "success": True}), 200
 
+        # ... (The rest of your excellent batching and retry logic does not need to change) ...
         batch_size = 5
         max_retries = 3
         retry_delay = 2
         all_embeddings = []
         failed_chunks = []
-        
         total_batches = (len(rows) + batch_size - 1) // batch_size
-        
         for batch_idx in range(0, len(rows), batch_size):
             batch_rows = rows[batch_idx:batch_idx + batch_size]
             batch_num = batch_idx // batch_size + 1
             print(f"Processing batch {batch_num}/{total_batches} ({len(batch_rows)} chunks)...")
-            
             texts_to_embed, valid_rows = [], []
             for row in batch_rows:
                 text = row['text'].strip()
@@ -239,9 +243,7 @@ def generate_embeddings():
                 if len(text) > 8000: text = text[:8000] + "..."
                 texts_to_embed.append(text)
                 valid_rows.append(row)
-            
             if not texts_to_embed: continue
-            
             for attempt in range(max_retries):
                 try:
                     embeddings = embedding_model.get_embeddings(texts_to_embed)
@@ -260,10 +262,8 @@ def generate_embeddings():
                     else:
                         time.sleep(retry_delay * (attempt + 1))
             time.sleep(1)
-
         if not all_embeddings:
             return jsonify({"error": "No embeddings were successfully generated", "failed_chunks": failed_chunks,"success": False}), 500
-
         print(f"Saving {len(all_embeddings)} embeddings to GCS...")
         jsonl_lines = [json.dumps(e, ensure_ascii=False) for e in all_embeddings]
         jsonl_string = "\n".join(jsonl_lines)
@@ -273,12 +273,10 @@ def generate_embeddings():
         gcs_blob = gcs_bucket.blob(gcs_path)
         gcs_blob.upload_from_string(jsonl_string, content_type='application/json')
         print(f"Embeddings saved to gs://{BUCKET_NAME}/{gcs_path}")
-        
         print("Upserting embeddings to Vertex AI Vector Search...")
         gcs_uri = f"gs://{BUCKET_NAME}/{gcs_path}"
         my_index_endpoint.upsert_from_gcs(gcs_uri=gcs_uri, deployed_index_id="telkom_kb_v1")
         print("Successfully upserted embeddings to Vector Search")
-        
         print("Embedding generation and upsert process completed successfully.")
         return jsonify({"success": True, "embeddings_generated": len(all_embeddings), "failed_chunks": failed_chunks, "gcs_path": gcs_path}), 200
         
