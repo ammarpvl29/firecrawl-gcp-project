@@ -7,3 +7,4 @@ requests
 beautifulsoup4
 html2text
 google-cloud-aiplatform
+vertexai
