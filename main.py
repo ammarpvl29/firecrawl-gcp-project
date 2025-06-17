@@ -9,10 +9,14 @@ from typing import Dict, List
 import requests
 
 from flask import Flask, jsonify
-from google.cloud import storage, bigquery, aiplatform
+from google.cloud import storage, bigquery
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse
 import html2text
+
+# --- FIX IS HERE: Import the specific model classes from the correct submodules ---
+from google.cloud import aiplatform
+from google.cloud.aiplatform.language_models import TextEmbeddingModel
 
 # --- Initialize Flask App and GCP Clients ---
 app = Flask(__name__)
