@@ -48,7 +48,7 @@ def start_telkom_crawl():
         print("FATAL ERROR: BUCKET_NAME environment variable is not set.")
         return "Internal server configuration error", 500
 
-    start_url = "https://smb.telkomuniversity.ac.id/"
+    start_url = "https://telkomuniversity.ac.id/"
     allowed_domain = "telkomuniversity.ac.id"
     max_pages = 200
     
@@ -225,7 +225,6 @@ def generate_embeddings():
         if not rows:
             return jsonify({"message": "No text chunks found to process.", "success": True}), 200
 
-        # ... (The rest of your excellent batching and retry logic does not need to change) ...
         batch_size = 5
         max_retries = 3
         retry_delay = 2
