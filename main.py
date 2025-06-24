@@ -17,6 +17,7 @@ import undetected_chromedriver as uc
 from google.cloud import aiplatform
 import vertexai
 from vertexai.language_models import TextEmbeddingModel
+from serpapi import GoogleSearch
 
 # --- Initialize Flask App and GCP Clients ---
 app = Flask(__name__)
@@ -40,15 +41,37 @@ VERTEX_REGION = "europe-west1"
 @app.route('/start-crawl', methods=['POST'])
 def start_telkom_crawl():
     """
-    This endpoint initiates a targeted web crawl with enhanced logging to
-    debug link discovery issues.
+    This endpoint bypasses anti-bot challenges by using Google Search to discover
+    internal pages, then crawls them directly.
     """
-    print("Targeted crawl initiation with Undetected Chromedriver received...")
+    print("Crawl initiation with Google Search Discovery received...")
 
-    if not BUCKET_NAME:
-        print("FATAL ERROR: BUCKET_NAME environment variable is not set.")
+    SERPAPI_KEY = os.environ.get("SERPAPI_KEY")
+    if not (BUCKET_NAME and SERPAPI_KEY):
+        print("FATAL ERROR: BUCKET_NAME or SERPAPI_KEY environment variable is not set.")
         return "Internal server configuration error", 500
 
+    # --- STEP 1: Discover URLs using Google Search ---
+    print("Discovering internal URLs via Google Search...")
+    search_params = {
+        "q": "site:telkomuniversity.ac.id", # The Google search query
+        "api_key": SERPAPI_KEY,
+        "num": 100,  # Ask for 100 results per page
+        "engine": "google"
+    }
+    
+    search = GoogleSearch(search_params)
+    results = search.get_dict()
+    
+    initial_urls_to_visit = [res["link"] for res in results.get("organic_results", [])]
+    
+    if not initial_urls_to_visit:
+        print("Could not discover any URLs via Google Search. Aborting.")
+        return jsonify(success=False, error="URL discovery failed."), 500
+
+    print(f"Discovered {len(initial_urls_to_visit)} initial URLs to crawl.")
+
+    # --- STEP 2: Proceed with the standard crawl ---
     options = uc.ChromeOptions()
     options.add_argument('--headless')
     options.add_argument('--no-sandbox')
@@ -60,16 +83,12 @@ def start_telkom_crawl():
         driver = uc.Chrome(options=options, use_subprocess=True)
         print("Chrome driver initialized successfully.")
 
-        start_url = "https://telkomuniversity.ac.id/"
         allowed_domain = "telkomuniversity.ac.id"
-        excluded_subdomains = {
-            "smb.telkomuniversity.ac.id",
-            "io.telkomuniversity.ac.id",
-            "library.telkomuniversity.ac.id"
-        }
+        excluded_subdomains = {"smb.telkomuniversity.ac.id", "io.telkomuniversity.ac.id", "library.telkomuniversity.ac.id"}
         max_pages = 200
         
-        urls_to_visit = [start_url]
+        # The crawler starts with the list from Google
+        urls_to_visit = list(initial_urls_to_visit)
         visited_urls = set()
         pages_crawled = 0
 
@@ -81,45 +100,18 @@ def start_telkom_crawl():
             if current_url in visited_urls:
                 continue
             try:
+                hostname = urlparse(current_url).netloc
+                if hostname in excluded_subdomains:
+                    print(f"Skipping excluded URL from initial list: {current_url}")
+                    continue
+
                 print(f"[{pages_crawled + 1}/{max_pages}] Navigating to: {current_url}")
                 driver.get(current_url)
-                # Increase sleep time slightly to ensure all JS has time to render links
-                time.sleep(4) 
+                time.sleep(2)
                 page_html = driver.page_source
                 visited_urls.add(current_url)
                 pages_crawled += 1
                 soup = BeautifulSoup(page_html, 'html.parser')
-
-                # --- DEBUGGING AND FIX ---
-                print(f"--- Found {len(soup.find_all('a', href=True))} links on page. Checking them now... ---")
-                
-                for link in soup.find_all('a', href=True):
-                    absolute_link = urljoin(current_url, link['href'])
-                    hostname = urlparse(absolute_link).netloc
-
-                    # Rule 1: Must be an HTTP link
-                    if not absolute_link.startswith('http'):
-                        print(f"  > [REJECTED] Not an HTTP link: {absolute_link}")
-                        continue
-                        
-                    # Rule 2: Must be within the allowed domain
-                    if not hostname.endswith(allowed_domain):
-                        print(f"  > [REJECTED] Outside allowed domain: {hostname}")
-                        continue
-
-                    # Rule 3: Must not be an excluded subdomain
-                    if hostname in excluded_subdomains:
-                        print(f"  > [REJECTED] Hostname is on exclusion list: {hostname}")
-                        continue
-
-                    # Rule 4: Must not have been visited or already in the queue
-                    if absolute_link in visited_urls or absolute_link in urls_to_visit:
-                        # This is normal, so we don't need a loud log for it
-                        continue
-                    
-                    # If all rules pass, add it to the queue
-                    print(f"  > [ACCEPTED] Adding new link to queue: {absolute_link}")
-                    urls_to_visit.append(absolute_link)
 
                 # The rest of the saving logic remains the same
                 main_content = soup.find('main') or soup.find('article') or soup.find('div', class_='content')

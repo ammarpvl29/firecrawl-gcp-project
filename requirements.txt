@@ -10,3 +10,4 @@ google-cloud-aiplatform
 vertexai
 selenium
 undetected-chromedriver
+google-search-results
