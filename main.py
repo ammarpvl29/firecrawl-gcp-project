@@ -12,6 +12,7 @@ from google.cloud import storage, bigquery
 from bs4 import BeautifulSoup
 from urllib.parse import urljoin, urlparse
 import html2text
+import undetected_chromedriver as uc
 
 from google.cloud import aiplatform
 import vertexai
@@ -34,64 +35,93 @@ VERTEX_REGION = "europe-west1"
 
 
 # ==============================================================================
-# SECTION 1: CRAWLER ENDPOINT
-# This is your existing code. It works perfectly.
+# SECTION 1: CRAWLER ENDPOINT (Upgraded with Undetected Chromedriver)
 # ==============================================================================
 @app.route('/start-crawl', methods=['POST'])
 def start_telkom_crawl():
     """
-    This endpoint initiates a custom web crawl of a target website.
+    This endpoint initiates a custom web crawl using a patched, undetected
+    Selenium chromedriver to bypass advanced anti-bot systems.
     """
-    print("Custom crawl initiation request received...")
+    print("Custom crawl initiation with Undetected Chromedriver received...")
 
     if not BUCKET_NAME:
         print("FATAL ERROR: BUCKET_NAME environment variable is not set.")
         return "Internal server configuration error", 500
 
-    start_url = "https://telkomuniversity.ac.id/"
-    allowed_domain = "telkomuniversity.ac.id"
-    max_pages = 200
-    
-    urls_to_visit = [start_url]
-    visited_urls = set()
-    pages_crawled = 0
+    # --- Selenium Driver Options ---
+    # These are crucial for running in a headless, containerized environment like Cloud Run
+    options = uc.ChromeOptions()
+    options.add_argument('--headless')
+    options.add_argument('--no-sandbox')
+    options.add_argument('--disable-dev-shm-usage')
 
-    h = html2text.HTML2Text()
-    h.ignore_links = True
+    driver = None # Initialize driver to None
+    try:
+        # --- CHANGE: Initialize the automated browser ---
+        print("Initializing Chrome driver...")
+        driver = uc.Chrome(options=options, use_subprocess=True)
+        print("Chrome driver initialized successfully.")
 
-    while urls_to_visit and pages_crawled < max_pages:
-        current_url = urls_to_visit.pop(0)
-        if current_url in visited_urls:
-            continue
-        try:
-            print(f"[{pages_crawled + 1}/{max_pages}] Crawling: {current_url}")
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-            }
-            response = requests.get(current_url, headers=headers, timeout=10)
-            response.raise_for_status()
-            visited_urls.add(current_url)
-            pages_crawled += 1
-            soup = BeautifulSoup(response.content, 'html.parser')
-            for link in soup.find_all('a', href=True):
-                absolute_link = urljoin(current_url, link['href'])
-                if urlparse(absolute_link).netloc.endswith(allowed_domain) and absolute_link not in visited_urls:
-                    urls_to_visit.append(absolute_link)
-            main_content = soup.find('main') or soup.find('article') or soup.find('div', class_='content')
-            html_content = str(main_content) if main_content else str(soup.body)
-            markdown_content = h.handle(html_content)
-            filename = "".join(c for c in current_url if c.isalnum() or c in ('-', '_')).rstrip() + ".md"
-            bucket = storage_client.bucket(BUCKET_NAME)
-            blob = bucket.blob(f"custom-crawl/{filename}")
-            blob.upload_from_string(markdown_content, content_type='text/markdown')
-            time.sleep(0.5)
-        except requests.exceptions.RequestException as e:
-            print(f"Could not fetch {current_url}. Reason: {e}")
-            visited_urls.add(current_url)
+        # --- Crawler Configuration ---
+        start_url = "https://telkomuniversity.ac.id/"
+        allowed_domain = "telkomuniversity.ac.id"
+        max_pages = 200  # Let's keep this lower for the first test with a slower method
+        
+        urls_to_visit = [start_url]
+        visited_urls = set()
+        pages_crawled = 0
 
-    print(f"Crawl finished. Visited {pages_crawled} pages.")
-    return jsonify(success=True, pages_crawled=pages_crawled, total_urls_found=len(visited_urls)), 200
+        h = html2text.HTML2Text()
+        h.ignore_links = True
 
+        while urls_to_visit and pages_crawled < max_pages:
+            current_url = urls_to_visit.pop(0)
+            if current_url in visited_urls:
+                continue
+            try:
+                print(f"[{pages_crawled + 1}/{max_pages}] Navigating to: {current_url}")
+                
+                # --- CHANGE: Use the driver to get the page ---
+                driver.get(current_url)
+                
+                # It's good practice to wait a bit for dynamic content to load, even if it seems static
+                time.sleep(2) 
+
+                # --- CHANGE: Get the page source from the driver ---
+                page_html = driver.page_source
+                
+                visited_urls.add(current_url)
+                pages_crawled += 1
+
+                soup = BeautifulSoup(page_html, 'html.parser')
+
+                # The rest of the logic remains the same
+                for link in soup.find_all('a', href=True):
+                    absolute_link = urljoin(current_url, link['href'])
+                    if urlparse(absolute_link).netloc.endswith(allowed_domain) and absolute_link not in visited_urls:
+                        urls_to_visit.append(absolute_link)
+
+                main_content = soup.find('main') or soup.find('article') or soup.find('div', class_='content')
+                html_content = str(main_content) if main_content else str(soup.body)
+                markdown_content = h.handle(html_content)
+                filename = "".join(c for c in current_url if c.isalnum() or c in ('-', '_')).rstrip() + ".md"
+                bucket = storage_client.bucket(BUCKET_NAME)
+                blob = bucket.blob(f"custom-crawl/{filename}")
+                blob.upload_from_string(markdown_content, content_type='text/markdown')
+
+            except Exception as e:
+                print(f"Could not process {current_url}. Reason: {e}")
+                visited_urls.add(current_url)
+
+        print(f"Crawl finished. Visited {pages_crawled} pages.")
+        return jsonify(success=True, pages_crawled=pages_crawled), 200
+
+    finally:
+        # --- VERY IMPORTANT: Always close the browser process ---
+        if driver:
+            print("Closing Chrome driver.")
+            driver.quit()
 
 # ==============================================================================
 # SECTION 2: NEW DATA CLEANING & PROCESSING ENDPOINT

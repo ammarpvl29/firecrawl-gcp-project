@@ -8,3 +8,5 @@ beautifulsoup4
 html2text
 google-cloud-aiplatform
 vertexai
+selenium
+undetected-chromedriver
