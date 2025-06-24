@@ -35,38 +35,46 @@ VERTEX_REGION = "europe-west1"
 
 
 # ==============================================================================
-# SECTION 1: CRAWLER ENDPOINT (Upgraded with Undetected Chromedriver)
+# SECTION 1: CRAWLER ENDPOINT (Adjusted for Specific Scope)
 # ==============================================================================
 @app.route('/start-crawl', methods=['POST'])
 def start_telkom_crawl():
     """
-    This endpoint initiates a custom web crawl using a patched, undetected
-    Selenium chromedriver to bypass advanced anti-bot systems.
+    This endpoint initiates a targeted web crawl of https://telkomuniversity.ac.id/
+    and its subdomains, while explicitly excluding a list of specific subdomains.
     """
-    print("Custom crawl initiation with Undetected Chromedriver received...")
+    print("Targeted crawl initiation with Undetected Chromedriver received...")
 
     if not BUCKET_NAME:
         print("FATAL ERROR: BUCKET_NAME environment variable is not set.")
         return "Internal server configuration error", 500
 
-    # --- Selenium Driver Options ---
-    # These are crucial for running in a headless, containerized environment like Cloud Run
     options = uc.ChromeOptions()
     options.add_argument('--headless')
     options.add_argument('--no-sandbox')
     options.add_argument('--disable-dev-shm-usage')
 
-    driver = None # Initialize driver to None
+    driver = None
     try:
-        # --- CHANGE: Initialize the automated browser ---
         print("Initializing Chrome driver...")
         driver = uc.Chrome(options=options, use_subprocess=True)
         print("Chrome driver initialized successfully.")
 
-        # --- Crawler Configuration ---
+        # --- ADJUSTMENT 1: Define the single starting point ---
         start_url = "https://telkomuniversity.ac.id/"
+        
+        # This domain rule allows exploration of other subdomains that are not excluded
         allowed_domain = "telkomuniversity.ac.id"
-        max_pages = 200  # Let's keep this lower for the first test with a slower method
+        
+        # --- ADJUSTMENT 2: Create a set of subdomains to explicitly exclude ---
+        # Using a set for efficient lookups
+        excluded_subdomains = {
+            "smb.telkomuniversity.ac.id",
+            "io.telkomuniversity.ac.id",
+            "library.telkomuniversity.ac.id"
+        }
+        
+        max_pages = 200
         
         urls_to_visit = [start_url]
         visited_urls = set()
@@ -81,27 +89,30 @@ def start_telkom_crawl():
                 continue
             try:
                 print(f"[{pages_crawled + 1}/{max_pages}] Navigating to: {current_url}")
-                
-                # --- CHANGE: Use the driver to get the page ---
                 driver.get(current_url)
-                
-                # It's good practice to wait a bit for dynamic content to load, even if it seems static
-                time.sleep(2) 
-
-                # --- CHANGE: Get the page source from the driver ---
+                time.sleep(2)
                 page_html = driver.page_source
-                
                 visited_urls.add(current_url)
                 pages_crawled += 1
-
                 soup = BeautifulSoup(page_html, 'html.parser')
 
-                # The rest of the logic remains the same
                 for link in soup.find_all('a', href=True):
                     absolute_link = urljoin(current_url, link['href'])
-                    if urlparse(absolute_link).netloc.endswith(allowed_domain) and absolute_link not in visited_urls:
-                        urls_to_visit.append(absolute_link)
+                    
+                    # Extract the hostname (e.g., "www.telkomuniversity.ac.id") from the link
+                    hostname = urlparse(absolute_link).netloc
 
+                    # --- ADJUSTMENT 3: Add the exclusion check to the logic ---
+                    # The link must be on an allowed domain AND NOT in our exclusion list.
+                    if hostname.endswith(allowed_domain) and hostname not in excluded_subdomains:
+                        if absolute_link not in visited_urls and absolute_link not in urls_to_visit:
+                            print(f"  > Discovered new link: {absolute_link}")
+                            urls_to_visit.append(absolute_link)
+                    elif hostname in excluded_subdomains:
+                        # This log helps confirm the exclusion logic is working
+                        print(f"  > Skipping excluded link: {absolute_link}")
+
+                # The rest of the saving logic remains the same
                 main_content = soup.find('main') or soup.find('article') or soup.find('div', class_='content')
                 html_content = str(main_content) if main_content else str(soup.body)
                 markdown_content = h.handle(html_content)
@@ -118,7 +129,6 @@ def start_telkom_crawl():
         return jsonify(success=True, pages_crawled=pages_crawled), 200
 
     finally:
-        # --- VERY IMPORTANT: Always close the browser process ---
         if driver:
             print("Closing Chrome driver.")
             driver.quit()
