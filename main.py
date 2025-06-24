@@ -65,7 +65,9 @@ def start_telkom_crawl():
             continue
         try:
             print(f"[{pages_crawled + 1}/{max_pages}] Crawling: {current_url}")
-            headers = {'User-Agent': 'Google-Cloud-Scheduler-Bot/1.0'}
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+            }
             response = requests.get(current_url, headers=headers, timeout=10)
             response.raise_for_status()
             visited_urls.add(current_url)
