@@ -35,13 +35,13 @@ VERTEX_REGION = "europe-west1"
 
 
 # ==============================================================================
-# SECTION 1: CRAWLER ENDPOINT (Adjusted for Specific Scope)
+# SECTION 1: CRAWLER ENDPOINT (Final Debug Version)
 # ==============================================================================
 @app.route('/start-crawl', methods=['POST'])
 def start_telkom_crawl():
     """
-    This endpoint initiates a targeted web crawl of https://telkomuniversity.ac.id/
-    and its subdomains, while explicitly excluding a list of specific subdomains.
+    This endpoint initiates a targeted web crawl with enhanced logging to
+    debug link discovery issues.
     """
     print("Targeted crawl initiation with Undetected Chromedriver received...")
 
@@ -60,20 +60,13 @@ def start_telkom_crawl():
         driver = uc.Chrome(options=options, use_subprocess=True)
         print("Chrome driver initialized successfully.")
 
-        # --- ADJUSTMENT 1: Define the single starting point ---
         start_url = "https://telkomuniversity.ac.id/"
-        
-        # This domain rule allows exploration of other subdomains that are not excluded
         allowed_domain = "telkomuniversity.ac.id"
-        
-        # --- ADJUSTMENT 2: Create a set of subdomains to explicitly exclude ---
-        # Using a set for efficient lookups
         excluded_subdomains = {
             "smb.telkomuniversity.ac.id",
             "io.telkomuniversity.ac.id",
             "library.telkomuniversity.ac.id"
         }
-        
         max_pages = 200
         
         urls_to_visit = [start_url]
@@ -90,27 +83,43 @@ def start_telkom_crawl():
             try:
                 print(f"[{pages_crawled + 1}/{max_pages}] Navigating to: {current_url}")
                 driver.get(current_url)
-                time.sleep(2)
+                # Increase sleep time slightly to ensure all JS has time to render links
+                time.sleep(4) 
                 page_html = driver.page_source
                 visited_urls.add(current_url)
                 pages_crawled += 1
                 soup = BeautifulSoup(page_html, 'html.parser')
 
+                # --- DEBUGGING AND FIX ---
+                print(f"--- Found {len(soup.find_all('a', href=True))} links on page. Checking them now... ---")
+                
                 for link in soup.find_all('a', href=True):
                     absolute_link = urljoin(current_url, link['href'])
-                    
-                    # Extract the hostname (e.g., "www.telkomuniversity.ac.id") from the link
                     hostname = urlparse(absolute_link).netloc
 
-                    # --- ADJUSTMENT 3: Add the exclusion check to the logic ---
-                    # The link must be on an allowed domain AND NOT in our exclusion list.
-                    if hostname.endswith(allowed_domain) and hostname not in excluded_subdomains:
-                        if absolute_link not in visited_urls and absolute_link not in urls_to_visit:
-                            print(f"  > Discovered new link: {absolute_link}")
-                            urls_to_visit.append(absolute_link)
-                    elif hostname in excluded_subdomains:
-                        # This log helps confirm the exclusion logic is working
-                        print(f"  > Skipping excluded link: {absolute_link}")
+                    # Rule 1: Must be an HTTP link
+                    if not absolute_link.startswith('http'):
+                        print(f"  > [REJECTED] Not an HTTP link: {absolute_link}")
+                        continue
+                        
+                    # Rule 2: Must be within the allowed domain
+                    if not hostname.endswith(allowed_domain):
+                        print(f"  > [REJECTED] Outside allowed domain: {hostname}")
+                        continue
+
+                    # Rule 3: Must not be an excluded subdomain
+                    if hostname in excluded_subdomains:
+                        print(f"  > [REJECTED] Hostname is on exclusion list: {hostname}")
+                        continue
+
+                    # Rule 4: Must not have been visited or already in the queue
+                    if absolute_link in visited_urls or absolute_link in urls_to_visit:
+                        # This is normal, so we don't need a loud log for it
+                        continue
+                    
+                    # If all rules pass, add it to the queue
+                    print(f"  > [ACCEPTED] Adding new link to queue: {absolute_link}")
+                    urls_to_visit.append(absolute_link)
 
                 # The rest of the saving logic remains the same
                 main_content = soup.find('main') or soup.find('article') or soup.find('div', class_='content')
