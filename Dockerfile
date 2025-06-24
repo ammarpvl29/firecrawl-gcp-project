@@ -1,35 +1,29 @@
-# Dockerfile (New Version with Google Chrome Installed)
+# Dockerfile (Optimized Version with Pre-installed Chromedriver)
 
-# Use an official Python image that is based on Debian
 FROM python:3.11-slim-bookworm
-
-# Set environment variables for best practices
 ENV PYTHONUNBUFFERED True
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install system dependencies for Chrome, including fonts and libraries
-# This is the most important new section
+# --- OPTIMIZATION: Install system dependencies and Chrome ---
 RUN apt-get update && apt-get install -y --no-install-recommends \
     wget \
     gnupg \
     ca-certificates \
-    # Add Google Chrome's official repository
+    unzip \
     && wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | apt-key add - \
     && sh -c 'echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" >> /etc/apt/sources.list.d/google-chrome.list' \
-    # Install Chrome
     && apt-get update && apt-get install -y google-chrome-stable \
-    # Clean up to keep the container size small
     && rm -rf /var/lib/apt/lists/*
 
-# Set the working directory inside the container
-WORKDIR /app
+# --- OPTIMIZATION: Download and install the matching chromedriver ---
+RUN CHROME_VERSION=$(google-chrome --version | cut -f 3 -d ' ' | cut -d '.' -f 1-3) && \
+    CHROMEDRIVER_VERSION=$(wget -qO- "https://googlechromelabs.github.io/chrome-for-testing/known-good-versions-with-downloads.json" | jq -r ".versions[] | select(.version | startswith(\"${CHROME_VERSION}\")) | .downloads.chromedriver[0].url") && \
+    wget -q --continue -P /tmp/ "${CHROMEDRIVER_VERSION}" && \
+    unzip /tmp/chromedriver-linux64.zip -d /usr/bin/ && \
+    rm /tmp/chromedriver-linux64.zip
 
-# Copy and install Python dependencies
+WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-
-# Copy the rest of your application code
 COPY . .
-
-# Command to run the application using Gunicorn
 CMD ["gunicorn", "--bind", "0.0.0.0:8080", "--workers", "1", "--threads", "8", "--timeout", "0", "main:app"]
