@@ -35,15 +35,15 @@ VERTEX_REGION = "europe-west1"
 
 
 # ==============================================================================
-# SECTION 1: CRAWLER ENDPOINT (Optimized for Speed)
+# SECTION 1: CRAWLER ENDPOINT (Adjusted for Specific Scope)
 # ==============================================================================
 @app.route('/start-crawl', methods=['POST'])
 def start_telkom_crawl():
     """
-    This endpoint initiates an optimized web crawl using a pre-installed
-    undetected chromedriver to ensure fast startup in Cloud Run.
+    This endpoint initiates a targeted web crawl of https://telkomuniversity.ac.id/
+    and its subdomains, while explicitly excluding a list of specific subdomains.
     """
-    print("Optimized crawl initiation with Undetected Chromedriver received...")
+    print("Targeted crawl initiation with Undetected Chromedriver received...")
 
     if not BUCKET_NAME:
         print("FATAL ERROR: BUCKET_NAME environment variable is not set.")
@@ -56,24 +56,30 @@ def start_telkom_crawl():
 
     driver = None
     try:
-        print("Initializing Chrome driver from pre-installed path...")
-        
-        # --- OPTIMIZATION: Point to the driver we installed in the Dockerfile ---
-        driver = uc.Chrome(
-            options=options,
-            driver_executable_path="/usr/bin/chromedriver",
-            use_subprocess=True
-        )
+        print("Initializing Chrome driver...")
+        driver = uc.Chrome(options=options, use_subprocess=True)
         print("Chrome driver initialized successfully.")
 
-        # --- The rest of your proven logic remains the same ---
+        # --- ADJUSTMENT 1: Define the single starting point ---
         start_url = "https://telkomuniversity.ac.id/"
+        
+        # This domain rule allows exploration of other subdomains that are not excluded
         allowed_domain = "telkomuniversity.ac.id"
-        excluded_subdomains = {"smb.telkomuniversity.ac.id", "io.telkomuniversity.ac.id", "library.telkomuniversity.ac.id"}
+        
+        # --- ADJUSTMENT 2: Create a set of subdomains to explicitly exclude ---
+        # Using a set for efficient lookups
+        excluded_subdomains = {
+            "smb.telkomuniversity.ac.id",
+            "io.telkomuniversity.ac.id",
+            "library.telkomuniversity.ac.id"
+        }
+        
         max_pages = 200
+        
         urls_to_visit = [start_url]
         visited_urls = set()
         pages_crawled = 0
+
         h = html2text.HTML2Text()
         h.ignore_links = True
 
@@ -89,15 +95,24 @@ def start_telkom_crawl():
                 visited_urls.add(current_url)
                 pages_crawled += 1
                 soup = BeautifulSoup(page_html, 'html.parser')
+
                 for link in soup.find_all('a', href=True):
                     absolute_link = urljoin(current_url, link['href'])
+                    
+                    # Extract the hostname (e.g., "www.telkomuniversity.ac.id") from the link
                     hostname = urlparse(absolute_link).netloc
+
+                    # --- ADJUSTMENT 3: Add the exclusion check to the logic ---
+                    # The link must be on an allowed domain AND NOT in our exclusion list.
                     if hostname.endswith(allowed_domain) and hostname not in excluded_subdomains:
                         if absolute_link not in visited_urls and absolute_link not in urls_to_visit:
                             print(f"  > Discovered new link: {absolute_link}")
                             urls_to_visit.append(absolute_link)
                     elif hostname in excluded_subdomains:
+                        # This log helps confirm the exclusion logic is working
                         print(f"  > Skipping excluded link: {absolute_link}")
+
+                # The rest of the saving logic remains the same
                 main_content = soup.find('main') or soup.find('article') or soup.find('div', class_='content')
                 html_content = str(main_content) if main_content else str(soup.body)
                 markdown_content = h.handle(html_content)
@@ -105,6 +120,7 @@ def start_telkom_crawl():
                 bucket = storage_client.bucket(BUCKET_NAME)
                 blob = bucket.blob(f"custom-crawl/{filename}")
                 blob.upload_from_string(markdown_content, content_type='text/markdown')
+
             except Exception as e:
                 print(f"Could not process {current_url}. Reason: {e}")
                 visited_urls.add(current_url)
